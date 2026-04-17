@@ -145,6 +145,22 @@
       flex-wrap: wrap;
     }
 
+    .preset-bar {
+      padding: 0 16px 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .preset-select {
+      min-width: 220px;
+      max-width: 360px;
+      width: 100%;
+      flex: 1;
+      font-size: .78rem;
+    }
+
     button {
       border: 0;
       border-radius: 999px;
@@ -162,6 +178,7 @@
     .btn-soft { background: #e8f4f2; color: #0d5e53; }
     .btn-warn { background: #ffe9e2; color: var(--danger); }
     .btn-view { background: #fff2e7; color: #a44c10; padding: 6px 12px; font-size: .76rem; }
+    .btn-preset { padding: 8px 12px; font-size: .75rem; }
 
     .meta {
       padding: 0 16px 14px;
@@ -337,20 +354,55 @@
       gap: 12px;
     }
 
+    .drawer-search {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .drawer-search input {
+      flex: 1;
+      font-size: .76rem;
+      padding: 8px 10px;
+    }
+
+    .search-clear {
+      background: #eef5f3;
+      color: #35524c;
+      padding: 7px 12px;
+      font-size: .74rem;
+    }
+
     .detail-card {
       border: 1px solid var(--line);
       border-radius: 12px;
       overflow: hidden;
     }
 
+    .detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      background: #f4f8f7;
+      padding: 8px 10px 8px 12px;
+    }
+
     .detail-card h4 {
       margin: 0;
-      padding: 9px 12px;
-      background: #f4f8f7;
       font-size: .76rem;
       text-transform: uppercase;
       letter-spacing: .4px;
       color: #3e5550;
+    }
+
+    .copy-mini {
+      background: #e7f4f1;
+      color: #0f6558;
+      font-size: .7rem;
+      padding: 5px 10px;
     }
 
     .detail-body {
@@ -365,6 +417,12 @@
       max-height: 260px;
       overflow: auto;
     }
+
+    .json-key { color: #8a3ffc; }
+    .json-string { color: #0d8f5f; }
+    .json-number { color: #c25400; }
+    .json-boolean { color: #0f63a9; }
+    .json-null { color: #8d5660; }
 
     .hidden { display: none; }
 
@@ -395,6 +453,20 @@
 
       <form id="filterForm">
         <div class="grid" id="filterGrid"></div>
+
+        <div class="preset-bar">
+          <select id="quickPresetSelect" class="preset-select">
+            <option value="">Quick Presets...</option>
+          </select>
+          <button class="btn-soft btn-preset" type="button" id="applyQuickPresetBtn">Apply Quick</button>
+
+          <select id="savedPresetSelect" class="preset-select">
+            <option value="">Saved Presets...</option>
+          </select>
+          <button class="btn-soft btn-preset" type="button" id="applySavedPresetBtn">Apply Saved</button>
+          <button class="btn-soft btn-preset" type="button" id="savePresetBtn">Save Current</button>
+          <button class="btn-warn btn-preset" type="button" id="deletePresetBtn">Delete Saved</button>
+        </div>
 
         <div class="actions">
           <button class="btn-primary" type="submit" id="applyBtn">Apply Filter</button>
@@ -452,6 +524,11 @@
       <button class="tab-btn" type="button" data-tab="response">Response</button>
     </div>
 
+    <div class="drawer-search">
+      <input id="drawerSearchInput" type="text" placeholder="Search inside drawer content..." />
+      <button class="search-clear" type="button" id="drawerSearchClearBtn">Clear</button>
+    </div>
+
     <div class="drawer-content" id="tabOverview"></div>
     <div class="drawer-content hidden" id="tabRequest"></div>
     <div class="drawer-content hidden" id="tabResponse"></div>
@@ -505,6 +582,12 @@
     const copyUrlBtn = document.getElementById('copyUrlBtn');
     const copyCurlBtn = document.getElementById('copyCurlBtn');
     const applyBtn = document.getElementById('applyBtn');
+    const quickPresetSelect = document.getElementById('quickPresetSelect');
+    const applyQuickPresetBtn = document.getElementById('applyQuickPresetBtn');
+    const savedPresetSelect = document.getElementById('savedPresetSelect');
+    const applySavedPresetBtn = document.getElementById('applySavedPresetBtn');
+    const savePresetBtn = document.getElementById('savePresetBtn');
+    const deletePresetBtn = document.getElementById('deletePresetBtn');
 
     const drawer = document.getElementById('drawer');
     const drawerBackdrop = document.getElementById('drawerBackdrop');
@@ -515,9 +598,17 @@
     const tabOverview = document.getElementById('tabOverview');
     const tabRequest = document.getElementById('tabRequest');
     const tabResponse = document.getElementById('tabResponse');
+    const drawerSearchInput = document.getElementById('drawerSearchInput');
+    const drawerSearchClearBtn = document.getElementById('drawerSearchClearBtn');
 
     let lastPagination = null;
     let lastItems = [];
+    let currentDrawerSections = { overview: [], request: [], response: [] };
+    const copyPayloadStore = new Map();
+    let copyPayloadCounter = 0;
+    const fieldKeySet = new Set(fields.map((f) => f.key));
+    const defaultValueMap = Object.fromEntries(fields.map((f) => [f.key, String(f.default || '')]));
+    const PRESET_STORAGE_KEY = 'arrl_saved_presets_v1';
 
     function escapeHtml(value) {
       if (value === null || value === undefined) return '';
@@ -535,12 +626,100 @@
       return 'warn';
     }
 
-    function pretty(value) {
-      if (value === null || value === undefined || value === '') return '-';
-      if (typeof value === 'string') {
-        try { return JSON.stringify(JSON.parse(value), null, 2); } catch (_) { return value; }
+    function formatForDisplay(value) {
+      if (value === null || value === undefined || value === '') {
+        return { text: '-', isJson: false };
       }
-      try { return JSON.stringify(value, null, 2); } catch (_) { return String(value); }
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          return { text: JSON.stringify(parsed, null, 2), isJson: true };
+        } catch (_) {
+          return { text: value, isJson: false };
+        }
+      }
+      try {
+        return { text: JSON.stringify(value, null, 2), isJson: true };
+      } catch (_) {
+        return { text: String(value), isJson: false };
+      }
+    }
+
+    function syntaxHighlightJson(text) {
+      let html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      html = html.replace(
+        /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\\s*:)?|\btrue\b|\bfalse\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)/g,
+        (match) => {
+          let cls = 'json-number';
+          if (/^"/.test(match)) {
+            cls = /:$/.test(match) ? 'json-key' : 'json-string';
+          } else if (/true|false/.test(match)) {
+            cls = 'json-boolean';
+          } else if (/null/.test(match)) {
+            cls = 'json-null';
+          }
+          return `<span class="${cls}">${match}</span>`;
+        },
+      );
+      return html;
+    }
+
+    function createCardHtml(title, value) {
+      const formatted = formatForDisplay(value);
+      const copyId = `copy_${++copyPayloadCounter}`;
+      copyPayloadStore.set(copyId, formatted.text === '-' ? '' : formatted.text);
+
+      const bodyHtml = formatted.isJson ? syntaxHighlightJson(formatted.text) : escapeHtml(formatted.text);
+
+      return `
+        <section class="detail-card">
+          <div class="detail-head">
+            <h4>${escapeHtml(title)}</h4>
+            <button type="button" class="copy-mini" data-copy-id="${copyId}">Copy</button>
+          </div>
+          <pre class="detail-body">${bodyHtml}</pre>
+        </section>
+      `;
+    }
+
+    function getActiveTabName() {
+      const active = document.querySelector('.tab-btn.active');
+      return active ? active.dataset.tab : 'overview';
+    }
+
+    function renderDrawerTab(tabName, query = '') {
+      const map = {
+        overview: tabOverview,
+        request: tabRequest,
+        response: tabResponse,
+      };
+
+      const container = map[tabName];
+      const sections = currentDrawerSections[tabName] || [];
+      const q = query.trim().toLowerCase();
+
+      const filtered = q
+        ? sections.filter((section) => {
+            const title = section.title.toLowerCase();
+            const content = formatForDisplay(section.value).text.toLowerCase();
+            return title.includes(q) || content.includes(q);
+          })
+        : sections;
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<section class="detail-card"><div class="detail-head"><h4>No Match</h4></div><pre class="detail-body">No drawer content matched your search.</pre></section>';
+        return;
+      }
+
+      container.innerHTML = filtered.map((section) => createCardHtml(section.title, section.value)).join('');
+    }
+
+    function applyDrawerSearch() {
+      renderDrawerTab(getActiveTabName(), drawerSearchInput.value || '');
     }
 
     function renderFields() {
@@ -583,6 +762,184 @@
       return url.toString();
     }
 
+    function buildSharePageUrl(filters) {
+      const pageUrl = new URL(window.location.href);
+      pageUrl.search = '';
+
+      Object.entries(filters).forEach(([key, value]) => {
+        if (!fieldKeySet.has(key)) return;
+        if (value === '') return;
+
+        const defaultValue = defaultValueMap[key] ?? '';
+        const isApplied = value !== defaultValue;
+
+        if (key === 'apiBase') {
+          if (value !== API_BASE_DEFAULT) pageUrl.searchParams.set(key, value);
+          return;
+        }
+
+        if (isApplied) pageUrl.searchParams.set(key, value);
+      });
+
+      return pageUrl.toString();
+    }
+
+    function syncPageQueryParams(filters) {
+      const shareUrl = buildSharePageUrl(filters);
+      window.history.replaceState({}, '', shareUrl);
+      return shareUrl;
+    }
+
+    function hydrateFiltersFromPageQuery() {
+      const pageUrl = new URL(window.location.href);
+      const params = pageUrl.searchParams;
+      let hasAppliedFilter = false;
+
+      for (const [key, value] of params.entries()) {
+        if (!fieldKeySet.has(key)) continue;
+        setField(key, value);
+        hasAppliedFilter = true;
+      }
+
+      return hasAppliedFilter;
+    }
+
+    function buildDateRange(period) {
+      const now = new Date();
+      if (period === 'today') {
+        const start = new Date(now);
+        start.setHours(0, 0, 0, 0);
+        return { from: start.toISOString(), to: now.toISOString() };
+      }
+      if (period === 'last24h') {
+        const start = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        return { from: start.toISOString(), to: now.toISOString() };
+      }
+      if (period === 'last1h') {
+        const start = new Date(now.getTime() - 60 * 60 * 1000);
+        return { from: start.toISOString(), to: now.toISOString() };
+      }
+      return { from: '', to: '' };
+    }
+
+    const quickPresets = [
+      {
+        key: 'errors_5xx_today',
+        label: '5xx Errors Today',
+        values: () => {
+          const range = buildDateRange('today');
+          return {
+            statusCodeFrom: '500',
+            statusCodeTo: '599',
+            createdAtFrom: range.from,
+            createdAtTo: range.to,
+            sortBy: 'createdAt',
+            sortOrder: 'desc',
+          };
+        },
+      },
+      {
+        key: 'slow_gt_1000_last24h',
+        label: 'Slow APIs > 1000ms (24h)',
+        values: () => {
+          const range = buildDateRange('last24h');
+          return {
+            responseTimeMsFrom: '1000',
+            createdAtFrom: range.from,
+            createdAtTo: range.to,
+            sortBy: 'responseTimeMs',
+            sortOrder: 'desc',
+          };
+        },
+      },
+      {
+        key: 'auth_4xx_today',
+        label: 'Auth 4xx Today',
+        values: () => {
+          const range = buildDateRange('today');
+          return {
+            path: '/auth',
+            statusCodeFrom: '400',
+            statusCodeTo: '499',
+            createdAtFrom: range.from,
+            createdAtTo: range.to,
+            sortBy: 'createdAt',
+            sortOrder: 'desc',
+          };
+        },
+      },
+      {
+        key: 'latest_1h',
+        label: 'Latest Traffic (1h)',
+        values: () => {
+          const range = buildDateRange('last1h');
+          return {
+            createdAtFrom: range.from,
+            createdAtTo: range.to,
+            sortBy: 'createdAt',
+            sortOrder: 'desc',
+          };
+        },
+      },
+    ];
+
+    function normalizePresetFilters(filters) {
+      const normalized = {};
+      Object.entries(filters).forEach(([key, value]) => {
+        if (!fieldKeySet.has(key)) return;
+        const val = String(value ?? '').trim();
+        if (val === '') return;
+
+        if (key === 'apiBase') {
+          if (val !== API_BASE_DEFAULT) normalized[key] = val;
+          return;
+        }
+
+        if (val !== (defaultValueMap[key] ?? '')) normalized[key] = val;
+      });
+      return normalized;
+    }
+
+    function loadSavedPresets() {
+      try {
+        const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter((item) => item && typeof item.name === 'string' && item.filters && typeof item.filters === 'object');
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function saveSavedPresets(presets) {
+      localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+    }
+
+    function renderQuickPresetOptions() {
+      quickPresetSelect.innerHTML = [
+        '<option value="">Quick Presets...</option>',
+        ...quickPresets.map((preset) => `<option value="${escapeHtml(preset.key)}">${escapeHtml(preset.label)}</option>`),
+      ].join('');
+    }
+
+    function renderSavedPresetOptions() {
+      const presets = loadSavedPresets();
+      savedPresetSelect.innerHTML = [
+        '<option value="">Saved Presets...</option>',
+        ...presets.map((preset, idx) => `<option value="${idx}">${escapeHtml(preset.name)}</option>`),
+      ].join('');
+    }
+
+    function applyFiltersToForm(values) {
+      fields.forEach((f) => setField(f.key, f.default || ''));
+      setField('page', '1');
+      Object.entries(values).forEach(([key, value]) => {
+        if (!fieldKeySet.has(key)) return;
+        setField(key, String(value));
+      });
+    }
+
     function renderMeta(pagination, itemsLength, elapsedMs) {
       if (!pagination) {
         metaEl.innerHTML = '<span>Belum ada pagination.</span>';
@@ -622,21 +979,13 @@
       }).join('');
     }
 
-    function detailCard(title, value) {
-      return `
-        <section class="detail-card">
-          <h4>${escapeHtml(title)}</h4>
-          <pre class="detail-body">${escapeHtml(pretty(value))}</pre>
-        </section>
-      `;
-    }
-
     function fillDrawer(item) {
       drawerTitle.textContent = `${item.method} ${item.path}`;
       drawerSub.textContent = `ID=${item.id} | status=${item.statusCode} | ${item.createdAt}`;
 
-      tabOverview.innerHTML = [
-        detailCard('Log Summary', {
+      currentDrawerSections = {
+        overview: [
+          { title: 'Log Summary', value: {
           id: item.id,
           createdAt: item.createdAt,
           method: item.method,
@@ -648,19 +997,22 @@
           userIdentifier: item.userIdentifier,
           userRole: item.userRole,
           ipAddress: item.ipAddress
-        }),
-        detailCard('Query Params', item.queryParams)
-      ].join('');
+        } },
+          { title: 'Query Params', value: item.queryParams },
+        ],
+        request: [
+          { title: 'Request Headers', value: item.requestHeaders },
+          { title: 'Request Body', value: item.requestBody },
+        ],
+        response: [
+          { title: 'Response Headers', value: item.responseHeaders },
+          { title: 'Response Body', value: item.responseBody },
+        ],
+      };
 
-      tabRequest.innerHTML = [
-        detailCard('Request Headers', item.requestHeaders),
-        detailCard('Request Body', item.requestBody)
-      ].join('');
-
-      tabResponse.innerHTML = [
-        detailCard('Response Headers', item.responseHeaders),
-        detailCard('Response Body', item.responseBody)
-      ].join('');
+      renderDrawerTab('overview');
+      renderDrawerTab('request');
+      renderDrawerTab('response');
     }
 
     function openDrawer(index) {
@@ -676,11 +1028,13 @@
       drawer.classList.remove('open');
       drawerBackdrop.classList.remove('open');
       drawer.setAttribute('aria-hidden', 'true');
+      drawerSearchInput.value = '';
     }
 
     async function runFetch() {
       const filters = getFilters();
       const url = buildUrl(filters);
+      syncPageQueryParams(filters);
 
       statusEl.className = 'status';
       statusEl.textContent = 'Loading...';
@@ -760,6 +1114,7 @@
       tabOverview.classList.toggle('hidden', tabName !== 'overview');
       tabRequest.classList.toggle('hidden', tabName !== 'request');
       tabResponse.classList.toggle('hidden', tabName !== 'response');
+      applyDrawerSearch();
     }
 
     form.addEventListener('submit', (e) => {
@@ -783,6 +1138,8 @@
     resetBtn.addEventListener('click', () => {
       fields.forEach((f) => setField(f.key, f.default || ''));
       setField('page', '1');
+      quickPresetSelect.value = '';
+      savedPresetSelect.value = '';
       statusEl.className = 'status';
       statusEl.textContent = 'Filter direset. Klik Apply Filter.';
       metaEl.innerHTML = '';
@@ -790,16 +1147,96 @@
       prevBtn.disabled = true;
       nextBtn.disabled = true;
       closeDrawer();
+      syncPageQueryParams(getFilters());
     });
 
     copyUrlBtn.addEventListener('click', () => {
-      const url = buildUrl(getFilters());
-      copyText(url, 'URL copied.');
+      const url = syncPageQueryParams(getFilters());
+      copyText(url, 'Share URL copied.');
     });
 
     copyCurlBtn.addEventListener('click', () => {
       const url = buildUrl(getFilters());
       copyText(buildCurl(url), 'cURL copied.');
+    });
+
+    applyQuickPresetBtn.addEventListener('click', () => {
+      const selected = quickPresetSelect.value;
+      if (!selected) {
+        statusEl.className = 'status error';
+        statusEl.textContent = 'Pilih quick preset dulu.';
+        return;
+      }
+
+      const preset = quickPresets.find((item) => item.key === selected);
+      if (!preset) return;
+
+      const values = preset.values();
+      applyFiltersToForm(values);
+      runFetch();
+    });
+
+    applySavedPresetBtn.addEventListener('click', () => {
+      const selected = savedPresetSelect.value;
+      if (selected === '') {
+        statusEl.className = 'status error';
+        statusEl.textContent = 'Pilih saved preset dulu.';
+        return;
+      }
+
+      const presets = loadSavedPresets();
+      const idx = Number(selected);
+      const preset = presets[idx];
+      if (!preset) return;
+
+      applyFiltersToForm(preset.filters || {});
+      runFetch();
+    });
+
+    savePresetBtn.addEventListener('click', () => {
+      const name = window.prompt('Preset name:');
+      if (!name || !name.trim()) return;
+
+      const filters = normalizePresetFilters(getFilters());
+      const trimmedName = name.trim();
+      const presets = loadSavedPresets();
+
+      const existingIdx = presets.findIndex((item) => item.name.toLowerCase() === trimmedName.toLowerCase());
+      if (existingIdx >= 0) {
+        presets[existingIdx] = { name: trimmedName, filters };
+      } else {
+        presets.push({ name: trimmedName, filters });
+      }
+
+      saveSavedPresets(presets);
+      renderSavedPresetOptions();
+      savedPresetSelect.value = String(Math.max(0, presets.findIndex((item) => item.name === trimmedName)));
+      statusEl.className = 'status';
+      statusEl.textContent = `Preset "${trimmedName}" saved.`;
+    });
+
+    deletePresetBtn.addEventListener('click', () => {
+      const selected = savedPresetSelect.value;
+      if (selected === '') {
+        statusEl.className = 'status error';
+        statusEl.textContent = 'Pilih saved preset yang mau dihapus.';
+        return;
+      }
+
+      const presets = loadSavedPresets();
+      const idx = Number(selected);
+      const target = presets[idx];
+      if (!target) return;
+
+      const confirmDelete = window.confirm(`Delete preset "${target.name}"?`);
+      if (!confirmDelete) return;
+
+      presets.splice(idx, 1);
+      saveSavedPresets(presets);
+      renderSavedPresetOptions();
+      savedPresetSelect.value = '';
+      statusEl.className = 'status';
+      statusEl.textContent = `Preset "${target.name}" deleted.`;
     });
 
     tbody.addEventListener('click', (e) => {
@@ -813,6 +1250,19 @@
       btn.addEventListener('click', () => activateTab(btn.dataset.tab));
     });
 
+    drawer.addEventListener('click', (e) => {
+      const copyBtn = e.target.closest('button[data-copy-id]');
+      if (!copyBtn) return;
+      const payload = copyPayloadStore.get(copyBtn.dataset.copyId) || '';
+      copyText(payload, 'Section content copied.');
+    });
+
+    drawerSearchInput.addEventListener('input', applyDrawerSearch);
+    drawerSearchClearBtn.addEventListener('click', () => {
+      drawerSearchInput.value = '';
+      applyDrawerSearch();
+    });
+
     closeDrawerBtn.addEventListener('click', closeDrawer);
     drawerBackdrop.addEventListener('click', closeDrawer);
 
@@ -821,8 +1271,15 @@
     });
 
     renderFields();
+    renderQuickPresetOptions();
+    renderSavedPresetOptions();
     prevBtn.disabled = true;
     nextBtn.disabled = true;
+
+    const hasInitialFilter = hydrateFiltersFromPageQuery();
+    if (hasInitialFilter) {
+      runFetch();
+    }
   </script>
 </body>
 </html>
