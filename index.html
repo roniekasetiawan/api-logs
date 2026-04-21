@@ -437,6 +437,26 @@
       .actions { gap: 8px; }
       .pagination { justify-content: flex-start; }
     }
+
+    .source-switch {
+      padding: 0 16px 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .source-btn {
+      background: #edf5f3;
+      color: #35524c;
+      padding: 8px 12px;
+      font-size: .78rem;
+    }
+
+    .source-btn.active {
+      background: var(--accent);
+      color: #fff;
+    }
   </style>
 </head>
 <body>
@@ -449,6 +469,11 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Filters</h2>
+      </div>
+
+      <div class="source-switch">
+        <button class="source-btn active" type="button" id="sourceHawnanBtn">Hawnan API Logs</button>
+        <button class="source-btn" type="button" id="sourceQaraaBtn">Qaraa Outbound Logs</button>
       </div>
 
       <form id="filterForm">
@@ -535,10 +560,24 @@
   </aside>
 
   <script>
-    const API_BASE_DEFAULT = 'https://api-dev.hawnan.id/api/v1/api-request-response-logs';
+    const LOG_SOURCES = {
+      hawnan: {
+        key: 'hawnan',
+        label: 'Hawnan API Logs',
+        apiBase: 'https://api-dev.hawnan.id/api/v1/api-request-response-logs',
+        presetStorageKey: 'arrl_saved_presets_hawnan_v1',
+      },
+      qaraa: {
+        key: 'qaraa',
+        label: 'Qaraa Outbound Logs',
+        apiBase: 'https://api-dev.hawnan.id/api/v1/qaraa-api-request-response-logs',
+        presetStorageKey: 'arrl_saved_presets_qaraa_v1',
+      },
+    };
+
+    let activeSource = 'hawnan';
 
     const fields = [
-      { key: 'apiBase', label: 'API Base URL', type: 'text', default: API_BASE_DEFAULT },
       { key: 'page', label: 'Page', type: 'number', default: '1' },
       { key: 'pageSize', label: 'Page Size', type: 'number', default: '50' },
       { key: 'id', label: 'ID', type: 'text' },
@@ -601,6 +640,9 @@
     const drawerSearchInput = document.getElementById('drawerSearchInput');
     const drawerSearchClearBtn = document.getElementById('drawerSearchClearBtn');
 
+    const sourceHawnanBtn = document.getElementById('sourceHawnanBtn');
+    const sourceQaraaBtn = document.getElementById('sourceQaraaBtn');
+
     let lastPagination = null;
     let lastItems = [];
     let currentDrawerSections = { overview: [], request: [], response: [] };
@@ -608,7 +650,6 @@
     let copyPayloadCounter = 0;
     const fieldKeySet = new Set(fields.map((f) => f.key));
     const defaultValueMap = Object.fromEntries(fields.map((f) => [f.key, String(f.default || '')]));
-    const PRESET_STORAGE_KEY = 'arrl_saved_presets_v1';
 
     function escapeHtml(value) {
       if (value === null || value === undefined) return '';
@@ -753,10 +794,9 @@
     }
 
     function buildUrl(filters) {
-      const baseUrl = filters.apiBase || API_BASE_DEFAULT;
-      const url = new URL(baseUrl);
+      const source = getActiveSourceConfig();
+      const url = new URL(source.apiBase);
       Object.entries(filters).forEach(([key, value]) => {
-        if (key === 'apiBase') return;
         if (value !== '') url.searchParams.set(key, value);
       });
       return url.toString();
@@ -766,18 +806,16 @@
       const pageUrl = new URL(window.location.href);
       pageUrl.search = '';
 
+      if (activeSource !== 'hawnan') {
+        pageUrl.searchParams.set('source', activeSource);
+      }
+
       Object.entries(filters).forEach(([key, value]) => {
         if (!fieldKeySet.has(key)) return;
         if (value === '') return;
 
         const defaultValue = defaultValueMap[key] ?? '';
         const isApplied = value !== defaultValue;
-
-        if (key === 'apiBase') {
-          if (value !== API_BASE_DEFAULT) pageUrl.searchParams.set(key, value);
-          return;
-        }
-
         if (isApplied) pageUrl.searchParams.set(key, value);
       });
 
@@ -795,7 +833,13 @@
       const params = pageUrl.searchParams;
       let hasAppliedFilter = false;
 
+      const sourceFromQuery = params.get('source');
+      if (sourceFromQuery && LOG_SOURCES[sourceFromQuery]) {
+        setActiveSource(sourceFromQuery, false);
+      }
+
       for (const [key, value] of params.entries()) {
+        if (key === 'source') continue;
         if (!fieldKeySet.has(key)) continue;
         setField(key, value);
         hasAppliedFilter = true;
@@ -890,11 +934,6 @@
         const val = String(value ?? '').trim();
         if (val === '') return;
 
-        if (key === 'apiBase') {
-          if (val !== API_BASE_DEFAULT) normalized[key] = val;
-          return;
-        }
-
         if (val !== (defaultValueMap[key] ?? '')) normalized[key] = val;
       });
       return normalized;
@@ -902,7 +941,7 @@
 
     function loadSavedPresets() {
       try {
-        const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+        const raw = localStorage.getItem(getPresetStorageKey());
         if (!raw) return [];
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
@@ -913,7 +952,7 @@
     }
 
     function saveSavedPresets(presets) {
-      localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets));
+      localStorage.setItem(getPresetStorageKey(), JSON.stringify(presets));
     }
 
     function renderQuickPresetOptions() {
@@ -946,6 +985,7 @@
         return;
       }
       metaEl.innerHTML = `
+        <span><b>Source:</b> ${escapeHtml(getActiveSourceConfig().label)}</span>
         <span><b>Page:</b> ${pagination.page}</span>
         <span><b>Page Size:</b> ${pagination.pageSize}</span>
         <span><b>Total Items:</b> ${pagination.totalItems}</span>
@@ -1117,6 +1157,34 @@
       applyDrawerSearch();
     }
 
+    function getActiveSourceConfig() {
+      return LOG_SOURCES[activeSource] || LOG_SOURCES.hawnan;
+    }
+
+    function getPresetStorageKey() {
+      return getActiveSourceConfig().presetStorageKey;
+    }
+
+    function setActiveSource(sourceKey, shouldFetch = true) {
+      if (!LOG_SOURCES[sourceKey]) return;
+
+      activeSource = sourceKey;
+      sourceHawnanBtn.classList.toggle('active', activeSource === 'hawnan');
+      sourceQaraaBtn.classList.toggle('active', activeSource === 'qaraa');
+
+      savedPresetSelect.value = '';
+      renderSavedPresetOptions();
+      syncPageQueryParams(getFilters());
+
+      statusEl.className = 'status';
+      statusEl.textContent = `Source aktif: ${getActiveSourceConfig().label}`;
+
+      if (shouldFetch) {
+        setField('page', '1');
+        runFetch();
+      }
+    }
+
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       runFetch();
@@ -1173,7 +1241,7 @@
 
       const values = preset.values();
       applyFiltersToForm(values);
-      runFetch();
+      run();
     });
 
     applySavedPresetBtn.addEventListener('click', () => {
@@ -1237,6 +1305,16 @@
       savedPresetSelect.value = '';
       statusEl.className = 'status';
       statusEl.textContent = `Preset "${target.name}" deleted.`;
+    });
+
+    sourceHawnanBtn.addEventListener('click', () => {
+      if (activeSource === 'hawnan') return;
+      setActiveSource('hawnan');
+    });
+
+    sourceQaraaBtn.addEventListener('click', () => {
+      if (activeSource === 'qaraa') return;
+      setActiveSource('qaraa');
     });
 
     tbody.addEventListener('click', (e) => {
